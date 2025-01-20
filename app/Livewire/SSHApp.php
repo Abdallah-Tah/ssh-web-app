@@ -88,7 +88,14 @@ class SSHApp extends Component
             );
             $this->isConnected = true;
             $this->errorMessage = null;
-            // $this->updateSystemMetrics();
+
+            // Initialize system metrics
+            try {
+                $this->updateSystemMetrics();
+            } catch (\Exception $e) {
+                Log::warning('Failed to update system metrics', ['error' => $e->getMessage()]);
+                // Don't fail the connection if metrics update fails
+            }
 
             Log::info('SSH connection successful, attempting SFTP connection');
             $this->sftpService->connect($this->hostname, $this->username, $this->password, $this->port);
@@ -97,14 +104,39 @@ class SSHApp extends Component
 
             $this->dispatch('connection-established');
         } catch (SSHConnectionException $e) {
+            $this->isConnected = false;
             $this->errorMessage = $e->getMessage();
             Log::error('SSH Connection failed', ['error' => $e->getMessage()]);
         } catch (SFTPException $e) {
+            $this->isConnected = false;
             $this->errorMessage = $e->getMessage();
             Log::error('SFTP Connection failed', ['error' => $e->getMessage()]);
         } catch (\Exception $e) {
+            $this->isConnected = false;
             $this->errorMessage = 'Failed to connect: ' . $e->getMessage();
             Log::error('Connection failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+        }
+    }
+
+    public function updateSystemMetrics(): void
+    {
+        if (!$this->isConnected) {
+            return;
+        }
+
+        try {
+            $metrics = $this->sshService->getSystemMetrics();
+            $this->systemMetrics = [
+                'cpu' => $metrics['cpu'] ?? 0,
+                'memory' => $metrics['memory'] ?? 0,
+                'disk' => $metrics['disk'] ?? 0
+            ];
+        } catch (\Exception $e) {
+            Log::error('Failed to update system metrics', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Don't throw the error to the UI, just log it
         }
     }
 

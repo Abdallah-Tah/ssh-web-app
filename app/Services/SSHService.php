@@ -6,7 +6,6 @@ use phpseclib3\Net\SSH2;
 use phpseclib3\Net\SFTP;
 use App\Exceptions\SSHConnectionException;
 use Illuminate\Support\Facades\Log;
-use Spatie\Ssh\Ssh;
 
 class SSHService
 {
@@ -266,19 +265,70 @@ class SSHService
 
     public function getSystemMetrics(): array
     {
-        $cpuCommand = "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'";
-        $memoryCommand = "free | grep Mem | awk '{print ($3/$2) * 100}'";
-        $diskCommand = "df / | tail -1 | awk '{print $5}' | sed 's/%//'";
+        if (!$this->ssh) {
+            throw new SSHConnectionException('No active SSH connection');
+        }
 
-        $cpu = (float) $this->executeCommand($cpuCommand);
-        $memory = (float) $this->executeCommand($memoryCommand);
-        $disk = (float) $this->executeCommand($diskCommand);
+        try {
+            // Use more Windows-compatible commands
+            if (PHP_OS_FAMILY === 'Windows') {
+                $cpuCommand = "wmic cpu get loadpercentage | findstr /r \"[0-9]\"";
+                $memoryCommand = "wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value";
+                $diskCommand = "wmic logicaldisk get size,freespace,caption";
+            } else {
+                $cpuCommand = "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'";
+                $memoryCommand = "free | grep Mem | awk '{print ($3/$2) * 100}'";
+                $diskCommand = "df / | tail -1 | awk '{print $5}' | sed 's/%//'";
+            }
 
-        return [
-            'cpu' => round($cpu, 2),
-            'memory' => round($memory, 2),
-            'disk' => round($disk, 2),
-        ];
+            $cpu = 0;
+            $memory = 0;
+            $disk = 0;
+
+            try {
+                if (PHP_OS_FAMILY === 'Windows') {
+                    $cpuOutput = $this->executeCommand($cpuCommand);
+                    $cpu = (float) trim($cpuOutput);
+
+                    $memoryOutput = $this->executeCommand($memoryCommand);
+                    preg_match('/TotalVisibleMemorySize=(\d+)\s+FreePhysicalMemory=(\d+)/', $memoryOutput, $matches);
+                    if (isset($matches[1], $matches[2])) {
+                        $total = (float) $matches[1];
+                        $free = (float) $matches[2];
+                        $memory = round(($total - $free) / $total * 100, 2);
+                    }
+
+                    $diskOutput = $this->executeCommand($diskCommand);
+                    preg_match('/\s+(\d+)\s+(\d+)\s+[A-Z]:/', $diskOutput, $matches);
+                    if (isset($matches[1], $matches[2])) {
+                        $free = (float) $matches[1];
+                        $total = (float) $matches[2];
+                        $disk = round(($total - $free) / $total * 100, 2);
+                    }
+                } else {
+                    $cpu = (float) $this->executeCommand($cpuCommand);
+                    $memory = (float) $this->executeCommand($memoryCommand);
+                    $disk = (float) $this->executeCommand($diskCommand);
+                }
+            } catch (\Exception $e) {
+                Log::error('Failed to get system metrics', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
+
+            return [
+                'cpu' => round($cpu, 2),
+                'memory' => round($memory, 2),
+                'disk' => round($disk, 2),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Failed to get system metrics', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw new SSHConnectionException('Failed to get system metrics: ' . $e->getMessage());
+        }
     }
 
     public function readFile(string $path): string

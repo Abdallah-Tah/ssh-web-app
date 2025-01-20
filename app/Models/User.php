@@ -51,7 +51,7 @@ class User extends Authenticatable
      *
      * @return \Illuminate\Database\Eloquent\Relations\HasMany<ServerConfig>
      */
-    public function serverConfigs(): HasMany
+    public function serverConfigs()
     {
         return $this->hasMany(ServerConfig::class);
     }
